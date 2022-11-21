@@ -195,6 +195,8 @@ int main (int argc, char *argv[]) {
     uint8_t* xSobel_pixarr = (uint8_t*)malloc(newsize*sizeof(uint8_t));
     uint8_t* ySobel_pixarr = (uint8_t*)malloc(newsize*sizeof(uint8_t));
     uint8_t* finalSobel_pixarr = (uint8_t*)malloc(newsize*sizeof(uint8_t));
+
+    uint8_t* afterNMS = (uint8_t*)malloc(newsize*sizeof(uint8_t));
     float* sobelDirection = (float*)malloc(newsize*sizeof(float));
 
 
@@ -210,11 +212,9 @@ int main (int argc, char *argv[]) {
 
     //FINAL SOBEL
         char ppm_finalSobel[20] = "OUT5_finalSobel.ppm";
-        uint32_t prod;
-
 
     for (int i=0; i < newsize; i++){
-        prod = ((uint32_t)ySobel_pixarr[i]*ySobel_pixarr[i])+((uint32_t)xSobel_pixarr[i]*xSobel_pixarr[i]);
+        uint32_t prod = ((uint32_t)ySobel_pixarr[i]*ySobel_pixarr[i])+((uint32_t)xSobel_pixarr[i]*xSobel_pixarr[i]);
 
             //saturating (some very strong edges were getting turned over
             if (sqrt(prod) > 255.0)
@@ -240,6 +240,49 @@ int main (int argc, char *argv[]) {
 
 
     //NON-MAXIMUM SUPPRESSION
+    /*
+
+        -take pixel, and find its gradient direction
+            -must convert 0-255 uint8_t pixel data to int8_t -128 to 127 range in order to do atan2 properly
+
+        gradient mapping:
+            -22.5/337.5° to 22.5° OR 157.5° to 202.5° ==> 0/180°
+                (-0.3927rad/5.8905rad to 0.3927rad) OR (2.7489rad to 3.5343rad)
+
+            22.5° to 67.5° OR 202.5° to 247.5° ==> 45°
+                (0.3927rad to 1.1781rad) OR (3.5343rad to 4.3197rad)
+
+            67.5° to 112.5° OR  247.5° to 292.5° ==> 90°
+                (1.1781rad to 1.9635rad) OR (4.3197rad to 5.1051rad)
+
+            112.5° to 157.5° OR 292.5° to -22.5/337.5° ==> 135°
+                (1.9635rad to 2.7489rad) OR (5.1051rad to -0.3927rad/5.8905rad)
+
+     */
+    //omit the border pixels
+
+    for (int i=1; i < IMGwidth-1; i++){
+        for (int j=1; j < IMGheight-1; j++){
+
+            //take current center of pixel, and derive all neighboring indices from it
+            int c = IMGwidth*i + j;
+            int nn = c - IMGwidth;
+            int ss = c + IMGwidth;
+            int ww = c + 1;
+            int ee = c - 1;
+            int nw = nn + 1;
+            int ne = nn - 1;
+            int sw = ss + 1;
+            int se = ss - 1;
+
+            int8_t xtemp = xSobel_pixarr[c] - 128;
+            int8_t ytemp = ySobel_pixarr[c] - 128;
+            float dir = atan2(ytemp, xtemp);            //range of -pi (-3.141593...) to pi (3.141593...)
+
+            //if the center pixel is the local maximum
+            if ( dir >
+        }
+    }
 
 
     free(grayed_pixarr);
