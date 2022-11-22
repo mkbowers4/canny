@@ -57,10 +57,10 @@ int writePGM (uint16_t* arr, int size, char* FILENAME, int mode){
     return 0;
 }
 
-int doGrayscale (uint8_t* oldarr, uint8_t* newarr, int newsize){
+int doGrayscale (uint8_t* oldarr, uint8_t* newarr, int size){
     uint8_t r, g, b;
     int i;
-    for (i=0; i<newsize; i++){
+    for (i=0; i<size; i++){
         r = oldarr[(3*i)];
         g = oldarr[(3*i)+1];
         b = oldarr[(3*i)+2];
@@ -129,91 +129,80 @@ int doConvo(uint8_t* output, uint8_t *IMGarr, float* K, int IMGwidth, int IMGhei
 
 int main (int argc, char *argv[]) {
 
-    //hardcoded kernels
-
-    //create kernels
     int status;
-    uint8_t* pixarr;
-    uint8_t* grayed_pixarr;
-    uint8_t* blurred_pixarr;
     FILE *fp = fopen("img.ppm", "r");
 
     //get header data & read parameters back
     readPPMHeader(fp);
     printf("IMG WIDTH = %d\n", IMGwidth);
     printf("IMG HEIGHT = %d\n", IMGheight);
+    int colorsize = (IMGwidth*IMGwidth)*3;      //a set of RGB values per pixel
+    
 
-    int size = (IMGwidth*IMGwidth)*3;      //a set of RGB values per pixel
-    pixarr = (uint8_t*)malloc(size);
-
-    //get pixel data
-    status = readPPMData(fp, pixarr, size);
+    //gather pixel data from color img
+    uint8_t* pixarr = (uint8_t*)malloc(colorsize);
+    status = readPPMData(fp, pixarr, colorsize);
     printf("IMG COUNT = %d\n", status);
     (void) fclose(fp);
 
-    //write back original image with original pixel data
+
+    //write back original color image with original pixel data
     char ppm_nochange[20] = "OUT0_unchanged.ppm";
-    status = writePPM(pixarr, size, ppm_nochange, 1);
+    status = writePPM(pixarr, colorsize, ppm_nochange, 1);
     printf("OUTIMG COUNT = %d\n", status);
-
-    int newsize = IMGwidth*IMGwidth;
-    grayed_pixarr = (uint8_t*)malloc(newsize);
-
 
 
     //CONVERSION TO GRAYSCALE
-
-    status = doGrayscale(pixarr, grayed_pixarr, newsize);
-
+    int graysize = IMGwidth*IMGwidth;
+    uint8_t* grayed_pixarr = (uint8_t*)malloc(graysize);
+    status = doGrayscale(pixarr, grayed_pixarr, graysize);
     free(pixarr);
 
+    //print out grayscale image
     char ppm_grayed[20] = "OUT1_grayscale.ppm";
-    status = writePPM(grayed_pixarr, newsize, ppm_grayed, 0);
+    status = writePPM(grayed_pixarr, graysize, ppm_grayed, 0);
 
-    //GAUSSIAN BLUR
+//GAUSSIAN BLUR
+
     //int KGauss[K1size*K1size] = {1, 4, 6, 4, 1, 4, 16, 24, 16, 4, 6, 24, 36, 24, 6, 4, 16, 24, 16, 4, 1, 4, 6, 4, 1};   //use 256
     int KGauss[K1size*K1size] = {2, 4, 5, 4, 2, 4, 9, 12, 9, 4, 5, 12, 15, 12, 5, 4, 9, 12, 9, 4, 2, 4, 5, 4, 2};     //use 1se 159
-    float KGaussTreated[K1size*K1size];
+    float KGaussF[K1size*K1size];
 
+    //treat gauss
     for (int i = 0; i <K1size*K1size; i++)
-        KGaussTreated[i] = ((float)KGauss[i]/159.);
-
+        KGaussF[i] = ((float)KGauss[i]/159.);
     for (int i=0; i<K1size*K1size; i++)
-      printf("K[%d] = %f ",i, KGaussTreated[i]);
+      printf("K[%d] = %f ",i, KGaussF[i]);
 
-    blurred_pixarr = (uint8_t*)malloc(newsize);
-    status = doConvo(blurred_pixarr, grayed_pixarr, KGaussTreated, IMGwidth, IMGheight, K1size);
+    //GAUSSIAN BLUR CONVOLUTION
+    uint8_t* blurred_pixarr = (uint8_t*)malloc(graysize);
+    status = doConvo(blurred_pixarr, grayed_pixarr, KGaussF, IMGwidth, IMGheight, K1size);
+
+    //print blurred image
     char ppm_blurred[20] = "OUT2_blurred.ppm";
-    status = writePPM(blurred_pixarr, newsize, ppm_blurred, 0);
+    status = writePPM(blurred_pixarr, graysize, ppm_blurred, 0);
 
-    //SOBEL
+//SOBEL
 
     //float KxSobel[K2size*K2size] = {-3., 0., 3., -10., 0., 10., -3., 0., 3.};
     //float KySobel[K2size*K2size] = {3., 10., 3., 0., 0., 0., -3., -10., -3.};
     float KxSobel[K2size*K2size] = {-1., 0., 1., -2., 0., 2., -1., 0., 1.};
     float KySobel[K2size*K2size] = {1., 2., 1., 0., 0., 0., -1., -2., -1.};
-    uint8_t* xSobel_pixarr = (uint8_t*)malloc(newsize*sizeof(uint8_t));
-    uint8_t* ySobel_pixarr = (uint8_t*)malloc(newsize*sizeof(uint8_t));
-    uint8_t* finalSobel_pixarr = (uint8_t*)malloc(newsize*sizeof(uint8_t));
+    uint8_t* xSobel_pixarr = (uint8_t*)malloc(graysize*sizeof(uint8_t));
+    uint8_t* ySobel_pixarr = (uint8_t*)malloc(graysize*sizeof(uint8_t));
+    uint8_t* finalSobel_pixarr = (uint8_t*)malloc(graysize*sizeof(uint8_t));
 
-    uint8_t* afterNMS = (uint8_t*)malloc(newsize*sizeof(uint8_t));
-    float* sobelDirection = (float*)malloc(newsize*sizeof(float));
-
-
-    //XSOBEL
+    //XSOBEL + print
         char ppm_xSobel[20]= "OUT4_xSobel.ppm";
         status = doConvo(xSobel_pixarr, blurred_pixarr, KxSobel, IMGwidth, IMGheight, K2size);
-        status = writePPM(xSobel_pixarr, newsize, ppm_xSobel, 0);
+        status = writePPM(xSobel_pixarr, graysize, ppm_xSobel, 0);
 
-    //YSOBEL
+    //YSOBEL + print
         char ppm_ySobel[20] = "OUT5_ySobel.ppm";
         status = doConvo(ySobel_pixarr, blurred_pixarr, KySobel, IMGwidth, IMGheight, K2size);
-        status = writePPM(ySobel_pixarr, newsize, ppm_ySobel, 0);
+        status = writePPM(ySobel_pixarr, graysize, ppm_ySobel, 0);
 
-    //FINAL SOBEL
-        char ppm_finalSobel[20] = "OUT5_finalSobel.ppm";
-
-    for (int i=0; i < newsize; i++){
+    for (int i=0; i < graysize; i++){
         uint32_t prod = ((uint32_t)ySobel_pixarr[i]*ySobel_pixarr[i])+((uint32_t)xSobel_pixarr[i]*xSobel_pixarr[i]);
 
             //saturating (some very strong edges were getting turned over
@@ -221,14 +210,11 @@ int main (int argc, char *argv[]) {
                 finalSobel_pixarr[i] = 255;
             else
                 finalSobel_pixarr[i] = (uint8_t)sqrt(prod);
-
-            //getting direction of edge
-             sobelDirection[i] = atan2(xSobel_pixarr[i], ySobel_pixarr[i]);
-        }
+    }
 
     //simpler adding of sobel results
     /*
-    for (int i=0; i < newsize; i++){
+    for (int i=0; i < graysize; i++){
         if (ySobel_pixarr[i] + xSobel_pixarr[i] > 255)
             finalSobel_pixarr[i] = 255;
         else
@@ -236,33 +222,46 @@ int main (int argc, char *argv[]) {
     }
     */
 
-    status = writePPM(finalSobel_pixarr, newsize, ppm_finalSobel, 0);
+    //FINAL SOBEL PRINT
+        char ppm_finalSobel[20] = "OUT5_finalSobel.ppm";   
+        status = writePPM(finalSobel_pixarr, graysize, ppm_finalSobel, 0);
 
 
-    //NON-MAXIMUM SUPPRESSION
+//NON-MAXIMUM SUPPRESSION
+
     /*
+        - Convert 0-255 uint8_t pixel data to int8_t -128 to 127 range in order to do atan2 properly
+            - NOTE: atan2 gives range of -pi to pi in radians.
+        - Find raw gradient direction, and confine to ranges of 0° (WW to EE), 45° (SW to NE), 90° (SS to NN), 135° (NW to SE))
+        -if the gradient direction is in a particular location (0°, 45°, 90°, 135°), then check if the center pixel is smaller than its neighbors
+        (checking for a local maximum. If it is a local maximum, we keep it)
+            
+                NW     NN     NE
+                    
+                WW     C      EE
 
-        -take pixel, and find its gradient direction
-            -must convert 0-255 uint8_t pixel data to int8_t -128 to 127 range in order to do atan2 properly
-
-        gradient mapping:
+                SW     SS     SE
+            
+        gradient mapping numbers:
             -22.5/337.5° to 22.5° OR 157.5° to 202.5° ==> 0/180°
                 (-0.3927rad/5.8905rad to 0.3927rad) OR (2.7489rad to 3.5343rad)
-
+                                                                       -2.74889
             22.5° to 67.5° OR 202.5° to 247.5° ==> 45°
                 (0.3927rad to 1.1781rad) OR (3.5343rad to 4.3197rad)
-
+                                            -2.74889        -1.96549
             67.5° to 112.5° OR  247.5° to 292.5° ==> 90°
                 (1.1781rad to 1.9635rad) OR (4.3197rad to 5.1051rad)
-
+                                            -1.96549   to  -1.18168
             112.5° to 157.5° OR 292.5° to -22.5/337.5° ==> 135°
                 (1.9635rad to 2.7489rad) OR (5.1051rad to -0.3927rad/5.8905rad)
-
+                                            -1.18168      -0.3927rad
      */
-    //omit the border pixels
 
-    for (int i=1; i < IMGwidth-1; i++){
-        for (int j=1; j < IMGheight-1; j++){
+    uint8_t* afterNMS = (uint8_t*)calloc(graysize, sizeof(uint8_t));
+
+        //omit the border pixels, so we +1 and -1 on the count start & end, respectively
+    for (int i=1; i < IMGheight-1; i++){
+        for (int j=1; j < IMGwidth-1; j++){
 
             //take current center of pixel, and derive all neighboring indices from it
             int c = IMGwidth*i + j;
@@ -279,25 +278,33 @@ int main (int argc, char *argv[]) {
             int8_t ytemp = ySobel_pixarr[c] - 128;
             float dir = atan2(ytemp, xtemp);            //range of -pi (-3.141593...) to pi (3.141593...)
 
-            //if the center pixel is the local maximum
-            if ( dir >
+            
+            if 
+            ( 
+                
+                ( ((dir > -0.3927 && dir < 0.3927) || (dir > 2.7489 || dir < -2.7489)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[ee] && finalSobel_pixarr[c] >= finalSobel_pixarr[ww])) ||
+                ( ((dir > 0.3927 && dir < 1.1781) || (dir > -2.7489 && dir < -1.9655)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[nw] && finalSobel_pixarr[c] >= finalSobel_pixarr[se])) ||
+                ( ((dir > 1.1781 && dir < 1.9635) || (dir > -1.9655 && dir < -1.1817)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[nn] && finalSobel_pixarr[c] >= finalSobel_pixarr[ss])) ||
+                ( ((dir > 1.9635 && dir < 2.7489) || (dir > -1.1817 && dir < -0.3927)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[ne] && finalSobel_pixarr[c] >= finalSobel_pixarr[sw]))  
+            )
+                 afterNMS[c] = finalSobel_pixarr[c];
+            else 
+                 afterNMS[c] = 0; 
         }
     }
 
+    //print out PPM for NMS
+    char ppm_nms[20] = "OUT_nms.ppm";
+    status = writePPM(afterNMS, graysize, ppm_nms, 0);
 
+//HYSTERESIS
+    
+    free(afterNMS);
     free(grayed_pixarr);
     free(blurred_pixarr);
     free(xSobel_pixarr);
     free(ySobel_pixarr);
     free(finalSobel_pixarr);
-    free(sobelDirection);
-
-
-
-
-
-
-
 }
 
 
