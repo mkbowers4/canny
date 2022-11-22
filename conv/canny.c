@@ -10,6 +10,12 @@
 #define K2size 3
 
 int IMGwidth, IMGheight;
+typedef enum 
+{
+    NO_EDGE,
+    WEAK_EDGE,
+    STRONG_EDGE
+} EDGE_TYPE;
 
 int writePPM (uint8_t* arr, int size, char* FILENAME, int mode){
 
@@ -259,7 +265,7 @@ int main (int argc, char *argv[]) {
 
     uint8_t* afterNMS = (uint8_t*)calloc(graysize, sizeof(uint8_t));
 
-        //omit the border pixels, so we +1 and -1 on the count start & end, respectively
+        //ignore the border pixels, so we +1 and -1 on the count start & end, respectively
     for (int i=1; i < IMGheight-1; i++){
         for (int j=1; j < IMGwidth-1; j++){
 
@@ -297,9 +303,70 @@ int main (int argc, char *argv[]) {
     char ppm_nms[20] = "OUT_nms.ppm";
     status = writePPM(afterNMS, graysize, ppm_nms, 0);
 
+
+//DOUBLE THRESHOLDING
+    //here we classify our edges if they're strong or not 
+
+    EDGE_TYPE* PixelType = (EDGE_TYPE*)malloc(graysize*sizeof(EDGE_TYPE));
+    uint8_t highThreshold = (uint8_t)(255*0.6);
+    uint8_t lowThreshold = (uint8_t)(255*0.25);
+    for (int i=1; i < IMGheight-1; i++){
+        for (int j=1; j < IMGwidth-1; j++){
+            int c = IMGwidth*i + j;
+            if (afterNMS[c] > highThreshold)
+                PixelType[c] = STRONG_EDGE;
+            else if ((afterNMS[c] < highThreshold) && (afterNMS[c] > lowThreshold))
+            {
+                PixelType[c] = WEAK_EDGE;
+            }
+            else
+                PixelType[c] = NO_EDGE;
+        }
+    }
+
+
 //HYSTERESIS
     
+    uint8_t* afterHyst = (uint8_t*)calloc(graysize, sizeof(uint8_t));
+
+    for (int i=1; i < IMGheight-1; i++){
+        for (int j=1; j < IMGwidth-1; j++){
+
+            //take current center of pixel, and derive all neighboring indices from it
+            int c = IMGwidth*i + j;
+            int nn = c - IMGwidth;
+            int ss = c + IMGwidth;
+            int ww = c + 1;
+            int ee = c - 1;
+            int nw = nn + 1;
+            int ne = nn - 1;
+            int sw = ss + 1;
+            int se = ss - 1;
+            if (PixelType[c] == NO_EDGE)    //suppress no edges
+                afterHyst[c] = 0; 
+            else if (PixelType[c] == STRONG_EDGE)   //saturate strong edges
+                afterHyst[c] = 255;
+
+            //now we need to consider weak edges. If any other surrounding edges are strong, make saturate the weak edge as you would a strong edge
+            //else, we remove weak edge
+            else if (
+                (PixelType[nn] == STRONG_EDGE) || (PixelType[ss] == STRONG_EDGE) || (PixelType[ww] == STRONG_EDGE) || (PixelType[ee] == STRONG_EDGE) || 
+                (PixelType[nw] == STRONG_EDGE) || (PixelType[ne] == STRONG_EDGE) || (PixelType[sw] == STRONG_EDGE) || (PixelType[se] == STRONG_EDGE) 
+            )
+                afterHyst[c] = 255;
+            else 
+                afterHyst[c] = 0;   
+        }
+    }
+    //print out PPM for NMS
+    char ppm_hyst[20] = "OUT_hyst.ppm";
+    status = writePPM(afterHyst, graysize, ppm_hyst, 0);
+    printf("done.");
+
+
+    free(PixelType);
     free(afterNMS);
+    free(afterHyst);
     free(grayed_pixarr);
     free(blurred_pixarr);
     free(xSobel_pixarr);
