@@ -9,6 +9,8 @@
 #define K1size 5
 #define K2size 3
 
+//#define doPPMprints
+
 int IMGwidth, IMGheight;
 typedef enum 
 {
@@ -135,6 +137,10 @@ int doConvo(uint8_t* output, uint8_t *IMGarr, float* K, int IMGwidth, int IMGhei
 
 int main (int argc, char *argv[]) {
 
+    //time stuff
+    struct timeval start, end;
+    long t_us;
+
     int status;
     FILE *fp = fopen("img.ppm", "r");
 
@@ -159,14 +165,15 @@ int main (int argc, char *argv[]) {
 
 
     //CONVERSION TO GRAYSCALE
-    int graysize = IMGwidth*IMGwidth;
+    int graysize = IMGwidth*IMGheight;
     uint8_t* grayed_pixarr = (uint8_t*)malloc(graysize);
     status = doGrayscale(pixarr, grayed_pixarr, graysize);
-    free(pixarr);
 
+#ifdef doPPMprints
     //print out grayscale image
     char ppm_grayed[20] = "OUT1_grayscale.ppm";
     status = writePPM(grayed_pixarr, graysize, ppm_grayed, 0);
+#endif
 
 //GAUSSIAN BLUR
 
@@ -177,17 +184,20 @@ int main (int argc, char *argv[]) {
     //treat gauss
     for (int i = 0; i <K1size*K1size; i++)
         KGaussF[i] = ((float)KGauss[i]/159.);
-    for (int i=0; i<K1size*K1size; i++)
-      printf("K[%d] = %f ",i, KGaussF[i]);
+
+
+gettimeofday (&start, NULL);
+
 
     //GAUSSIAN BLUR CONVOLUTION
     uint8_t* blurred_pixarr = (uint8_t*)malloc(graysize);
     status = doConvo(blurred_pixarr, grayed_pixarr, KGaussF, IMGwidth, IMGheight, K1size);
 
     //print blurred image
+#ifdef doPPMprints
     char ppm_blurred[20] = "OUT2_blurred.ppm";
     status = writePPM(blurred_pixarr, graysize, ppm_blurred, 0);
-
+#endif
 //SOBEL
 
     //float KxSobel[K2size*K2size] = {-3., 0., 3., -10., 0., 10., -3., 0., 3.};
@@ -199,14 +209,27 @@ int main (int argc, char *argv[]) {
     uint8_t* finalSobel_pixarr = (uint8_t*)malloc(graysize*sizeof(uint8_t));
 
     //XSOBEL + print
-        char ppm_xSobel[20]= "OUT4_xSobel.ppm";
-        status = doConvo(xSobel_pixarr, blurred_pixarr, KxSobel, IMGwidth, IMGheight, K2size);
-        status = writePPM(xSobel_pixarr, graysize, ppm_xSobel, 0);
 
+        status = doConvo(xSobel_pixarr, blurred_pixarr, KxSobel, IMGwidth, IMGheight, K2size);
+#ifdef doPPMprints
+        char ppm_xSobel[20]= "OUT4_xSobel.ppm";
+        status = writePPM(xSobel_pixarr, graysize, ppm_xSobel, 0);
+#endif
     //YSOBEL + print
-        char ppm_ySobel[20] = "OUT5_ySobel.ppm";
+
         status = doConvo(ySobel_pixarr, blurred_pixarr, KySobel, IMGwidth, IMGheight, K2size);
+#ifdef doPPMprints
+        char ppm_ySobel[20] = "OUT5_ySobel.ppm";
         status = writePPM(ySobel_pixarr, graysize, ppm_ySobel, 0);
+#endif
+
+    //suppress absurd highs
+    for (int i=0; i < graysize; i++){
+        if (ySobel_pixarr[i] > 175)
+            ySobel_pixarr[i] = 175;   
+        if (xSobel_pixarr[i] > 175)
+            xSobel_pixarr[i] = 175; 
+    }
 
     for (int i=0; i < graysize; i++){
         uint32_t prod = ((uint32_t)ySobel_pixarr[i]*ySobel_pixarr[i])+((uint32_t)xSobel_pixarr[i]*xSobel_pixarr[i]);
@@ -227,19 +250,18 @@ int main (int argc, char *argv[]) {
             finalSobel_pixarr[i] = ySobel_pixarr[i] + xSobel_pixarr[i];
     }
     */
-
+#ifdef doPPMprints
     //FINAL SOBEL PRINT
         char ppm_finalSobel[20] = "OUT5_finalSobel.ppm";   
         status = writePPM(finalSobel_pixarr, graysize, ppm_finalSobel, 0);
-
+#endif
 
 //NON-MAXIMUM SUPPRESSION
 
     /*
-        - Convert 0-255 uint8_t pixel data to int8_t -128 to 127 range in order to do atan2 properly
-            - NOTE: atan2 gives range of -pi to pi in radians.
-        - Find raw gradient direction, and confine to ranges of 0° (WW to EE), 45° (SW to NE), 90° (SS to NN), 135° (NW to SE))
-        -if the gradient direction is in a particular location (0°, 45°, 90°, 135°), then check if the center pixel is smaller than its neighbors
+
+        - Find raw gradient direction, and confine to ranges of 0° (WW to EE), 45/135° (SW to NE, NW to SE), 90° (SS to NN)
+        -if the gradient direction is in a particular location (0°, 45/135°, 90°), then check if the center pixel is smaller than its neighbors
         (checking for a local maximum. If it is a local maximum, we keep it)
             
                 NW     NN     NE
@@ -247,7 +269,8 @@ int main (int argc, char *argv[]) {
                 WW     C      EE
 
                 SW     SS     SE
-            
+
+         //OLD!!!!!!!
         gradient mapping numbers:
             -22.5/337.5° to 22.5° OR 157.5° to 202.5° ==> 0/180°
                 (-0.3927rad/5.8905rad to 0.3927rad) OR (2.7489rad to 3.5343rad)
@@ -263,11 +286,13 @@ int main (int argc, char *argv[]) {
                                             -1.18168      -0.3927rad
      */
 
+
+
     uint8_t* afterNMS = (uint8_t*)calloc(graysize, sizeof(uint8_t));
 
         //ignore the border pixels, so we +1 and -1 on the count start & end, respectively
-    for (int i=1; i < IMGheight-1; i++){
-        for (int j=1; j < IMGwidth-1; j++){
+    for (int i=2; i < IMGheight-2; i++){
+        for (int j=2; j < IMGwidth-2; j++){
 
             //take current center of pixel, and derive all neighboring indices from it
             int c = IMGwidth*i + j;
@@ -280,18 +305,25 @@ int main (int argc, char *argv[]) {
             int sw = ss + 1;
             int se = ss - 1;
 
-            int8_t xtemp = xSobel_pixarr[c] - 128;
-            int8_t ytemp = ySobel_pixarr[c] - 128;
-            float dir = atan2(ytemp, xtemp);            //range of -pi (-3.141593...) to pi (3.141593...)
-
+            //OLD (SIGNED CONVERSION)
+            //int8_t xtemp = xSobel_pixarr[c] - 128;
+            //int8_t ytemp = ySobel_pixarr[c] - 128;
+            //float dir = atan2(ytemp, xtemp);            //range of -pi (-3.141593...) to pi (3.141593...)
+            float dir = atan2(ySobel_pixarr[c], xSobel_pixarr[c]);            
             
             if 
-            ( 
-                
-                ( ((dir > -0.3927 && dir < 0.3927) || (dir > 2.7489 || dir < -2.7489)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[ee] && finalSobel_pixarr[c] >= finalSobel_pixarr[ww])) ||
-                ( ((dir > 0.3927 && dir < 1.1781) || (dir > -2.7489 && dir < -1.9655)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[nw] && finalSobel_pixarr[c] >= finalSobel_pixarr[se])) ||
-                ( ((dir > 1.1781 && dir < 1.9635) || (dir > -1.9655 && dir < -1.1817)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[nn] && finalSobel_pixarr[c] >= finalSobel_pixarr[ss])) ||
-                ( ((dir > 1.9635 && dir < 2.7489) || (dir > -1.1817 && dir < -0.3927)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[ne] && finalSobel_pixarr[c] >= finalSobel_pixarr[sw]))  
+             
+                ( 
+
+                ( (dir < 0.3927) && (finalSobel_pixarr[c] >= finalSobel_pixarr[ee] && finalSobel_pixarr[c] >= finalSobel_pixarr[ww])) || 
+                ( (dir > 0.3927) && (dir < 1.1781) && (finalSobel_pixarr[c] >= finalSobel_pixarr[ss] && finalSobel_pixarr[c] >= finalSobel_pixarr[nn])) ||
+                ( (dir > 1.1781) && ( (finalSobel_pixarr[c] >= finalSobel_pixarr[sw] && finalSobel_pixarr[c] >= finalSobel_pixarr[ne]) && (finalSobel_pixarr[c] >= finalSobel_pixarr[se] && finalSobel_pixarr[c] >= finalSobel_pixarr[nw])))
+
+                //OLD (SIGNED CONVERSION)
+                // ( ((dir > -0.3927 && dir < 0.3927) || (dir > 2.7489 || dir < -2.7489)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[ee] && finalSobel_pixarr[c] >= finalSobel_pixarr[ww])) ||
+                // ( ((dir > 0.3927 && dir < 1.1781) || (dir > -2.7489 && dir < -1.9655)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[nw] && finalSobel_pixarr[c] >= finalSobel_pixarr[se])) ||
+                // ( ((dir > 1.1781 && dir < 1.9635) || (dir > -1.9655 && dir < -1.1817)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[nn] && finalSobel_pixarr[c] >= finalSobel_pixarr[ss])) ||
+                // ( ((dir > 1.9635 && dir < 2.7489) || (dir > -1.1817 && dir < -0.3927)) && (finalSobel_pixarr[c] >= finalSobel_pixarr[ne] && finalSobel_pixarr[c] >= finalSobel_pixarr[sw]))  
             )
                  afterNMS[c] = finalSobel_pixarr[c];
             else 
@@ -299,19 +331,20 @@ int main (int argc, char *argv[]) {
         }
     }
 
+#ifdef doPPMprints
     //print out PPM for NMS
     char ppm_nms[20] = "OUT_nms.ppm";
     status = writePPM(afterNMS, graysize, ppm_nms, 0);
-
-
+#endif
+   
 //DOUBLE THRESHOLDING
     //here we classify our edges if they're strong or not 
 
     EDGE_TYPE* PixelType = (EDGE_TYPE*)malloc(graysize*sizeof(EDGE_TYPE));
-    uint8_t highThreshold = (uint8_t)(255*0.6);
-    uint8_t lowThreshold = (uint8_t)(255*0.25);
-    for (int i=1; i < IMGheight-1; i++){
-        for (int j=1; j < IMGwidth-1; j++){
+    uint8_t highThreshold = (uint8_t)(255*0.3);
+    uint8_t lowThreshold = (uint8_t)(highThreshold*0.75);
+    for (int i=0; i < IMGheight; i++){
+        for (int j=0; j < IMGwidth; j++){
             int c = IMGwidth*i + j;
             if (afterNMS[c] > highThreshold)
                 PixelType[c] = STRONG_EDGE;
@@ -324,9 +357,46 @@ int main (int argc, char *argv[]) {
         }
     }
 
+#ifdef doPPMprints
+//////////////JUST FOR PRINTING
+    uint8_t* afterDthr = (uint8_t*)calloc(graysize, sizeof(uint8_t));
+
+    for (int i=0; i < IMGheight; i++){
+        for (int j=0; j < IMGwidth; j++){
+            int c = IMGwidth*i + j;
+            if (PixelType[c] == NO_EDGE)
+                afterDthr[c] = 0;
+            else 
+                afterDthr[c] = afterNMS[c];
+        }
+    }
+    char ppm_dthr[20] = "OUT_dthr.ppm";
+    status = writePPM(afterDthr, graysize, ppm_dthr, 0);
+
+    uint8_t* afterDthr2 = (uint8_t*)calloc(graysize, sizeof(uint8_t));
+
+    for (int i=0; i < IMGheight; i++){
+        for (int j=0; j < IMGwidth; j++){
+            int c = IMGwidth*i + j;
+            if (PixelType[c] == NO_EDGE)
+                afterDthr2[c] = 0;
+            else if (PixelType[c] == WEAK_EDGE)
+                afterDthr2[c] = 125;
+            else
+                afterDthr2[c] = 255;
+        }
+    }
+
+    char ppm_dthr2[20] = "OUT_dthr2.ppm";
+    status = writePPM(afterDthr2, graysize, ppm_dthr2, 0);
+
+/////////////////JUST FOR PRINTING
+#endif
+
+
+
 
 //HYSTERESIS
-    
     uint8_t* afterHyst = (uint8_t*)calloc(graysize, sizeof(uint8_t));
 
     for (int i=1; i < IMGheight-1; i++){
@@ -344,8 +414,10 @@ int main (int argc, char *argv[]) {
             int se = ss - 1;
             if (PixelType[c] == NO_EDGE)    //suppress no edges
                 afterHyst[c] = 0; 
-            else if (PixelType[c] == STRONG_EDGE)   //saturate strong edges
+            else if (PixelType[c] == STRONG_EDGE){
+                //saturate strong edges
                 afterHyst[c] = 255;
+            }  
 
             //now we need to consider weak edges. If any other surrounding edges are strong, make saturate the weak edge as you would a strong edge
             //else, we remove weak edge
@@ -358,12 +430,21 @@ int main (int argc, char *argv[]) {
                 afterHyst[c] = 0;   
         }
     }
+gettimeofday (&end, NULL);
     //print out PPM for NMS
     char ppm_hyst[20] = "OUT_hyst.ppm";
     status = writePPM(afterHyst, graysize, ppm_hyst, 0);
     printf("done.");
 
+printf ("start: %ld us\n", start.tv_usec); // start.tv_sec
+printf ("end: %ld us\n", end.tv_usec);    // end.tv_sec;
+t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec; // for ms: define t_ms as double and divide by 1000.0
+// gettimeofday: returns current time. So, when the secs increment, the us resets to 0.
+printf ("Elapsed time: %ld us\n", t_us);
 
+
+
+    free(pixarr);
     free(PixelType);
     free(afterNMS);
     free(afterHyst);
