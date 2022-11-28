@@ -1,0 +1,1 @@
+/usr/bin/c++ -O3 -DNDEBUG -rdynamic CMakeFiles/cannycuda.dir/cannycuda_generated_cannycuda.cu.o -o cannycuda   -L/home/mike/repos/libwb/build  -Wl,-rpath,/home/mike/repos/libwb/build /usr/local/cuda/lib64/libcudart_static.a -ldl -Wl,-Bstatic -lrt -Wl,-Bdynamic -lwb 
