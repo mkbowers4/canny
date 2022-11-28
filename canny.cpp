@@ -27,7 +27,6 @@ int CannySeq(int printPPMs);
 void doConvoSeq(uint8_t* output, uint8_t *IMGarr, float* K, int IMGwidth, int IMGheight, int Ksize);
 int doGrayscaleSeq (uint8_t* oldarr, uint8_t* newarr, int size);
 
-
 int CannyTBB(int printPPMs);
 void doConvoTBB(uint8_t* output, uint8_t *IMGarr, float* K, int IMGwidth, int IMGheight, int Ksize);
 uint8_t doNMS_tbb(uint8_t* finalSobel_pixarr, uint8_t* xSobel_pixarr, uint8_t* ySobel_pixarr, int i, int j);
@@ -39,10 +38,6 @@ uint8_t doThresh_tbb(uint8_t* afterNMS, int i, int j, uint8_t highThreshold, uin
 int writePPM (uint8_t* arr, int size, char* FILENAME, int mode);
 void readPPMHeader (FILE *fp);
 int readPPMData (FILE *fp, uint8_t* pixarr, int size);
-
-
-
-
 
 //MAIN
 int main (int argc, char *argv[]) {
@@ -57,11 +52,10 @@ int main (int argc, char *argv[]) {
     int mode = atoi(argv[1]);
     int printPPMs = atoi(argv[2]);
 
-    //int doTimes = atoi(argv[2]);
-    // if (doTimes != 0 && doTimes != 1){
-    //     printf("ERROR: invalid T argument\n");
-    //     exit(-1);
-    // }
+    if (printPPMs != 0 && printPPMs != 1){
+         printf("ERROR: invalid PPMs argument\n");
+         exit(-1);
+    }
     if (mode == 0)
         status = CannySeq(printPPMs);
     else if (mode == 1)
@@ -181,26 +175,26 @@ void doConvoSeq(uint8_t* output, uint8_t *IMGarr, float* K, int IMGwidth, int IM
 
 int CannySeq(int printPPMs)
 {
-    int status; //used for some prints
-    //NEED a ppm file named img.ppm in the same directory, which is set up to be read from
+    int status; 
+//NEED a ppm file named img.ppm in the same directory, which is set up to be read from
     FILE *fp;
     if ( !(fp = fopen("img.ppm", "r"))){
         printf("ERROR: Need a .ppm (P6) file named 'img.ppm' in same directory as executable\n");
         exit(-1);
     }
 
-    //get header data (width and height of image) from PPM input
+//get header data (width and height of image) from PPM input
     readPPMHeader(fp);
     printf("IMG WIDTH = %d\n", IMGwidth);
     printf("IMG HEIGHT = %d\n", IMGheight);
 
-    //PPM uses 1R, 1G, 1B per pixel
-    //only keep track of one pixel for grayscale calculations
+//PPM uses 1R, 1G, 1B per pixel
+//only keep track of one pixel for grayscale calculations
     int colorsize = (IMGwidth*IMGheight)*3;      
     int graysize = IMGheight*IMGwidth;
 
-    //all memory allocations
-    //x and y sobel are split up to print separate .PPMs for each
+//all memory allocations
+//x and y sobel are split up to print separate .PPMs for each
     uint8_t* pixarr = (uint8_t*)malloc(colorsize);
     uint8_t* grayed_pixarr = (uint8_t*)malloc(graysize);
     uint8_t* blurred_pixarr = (uint8_t*)malloc(graysize);
@@ -214,47 +208,48 @@ int CannySeq(int printPPMs)
     uint8_t* afterDthr = (uint8_t*)calloc(graysize, sizeof(uint8_t));
     uint8_t* afterDthr2 = (uint8_t*)calloc(graysize, sizeof(uint8_t));
     
-
-    //get pixel data from PPM input
+//get pixel data from PPM input
     status = readPPMData(fp, pixarr, colorsize);
     printf("IMG COUNT = %d\n", status);
     (void) fclose(fp);
 
+//write back original color image to new PPM
     if (printPPMs){
-        //write back original color image with original pixel data
         char ppm_nochange[20] = "0_original_s.ppm";
         status = writePPM(pixarr, colorsize, ppm_nochange, 1);
         printf("OUTIMG COUNT = %d\n", status);
     }
 
+//timing 
     #ifdef USE_TIMES
         struct timeval start, end; 
         long t_us, t_us_total = 0;
     #endif
 
-    /////////////////////////////////////////////////////////////////////////////////////
-    ///// Step 1: Convert to GRAYSCALE //////////////////////////////////////////////////
-    /////////////////////////////////////////////////////////////////////////////////////
-        gettimeofday(&start, NULL);
-            status = doGrayscaleSeq(pixarr, grayed_pixarr, graysize);
-        gettimeofday(&end, NULL);
-        printf("Grayscale_seq Run:\n");
-        printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
-        t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
-        printf("    Elapsed time: %ld us\n", t_us);
-        t_us_total += t_us;
+/////////////////////////////////////////////////////////////////////////////////////
+///// Step 1: Convert to GRAYSCALE //////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////
+    gettimeofday(&start, NULL);
+    status = doGrayscaleSeq(pixarr, grayed_pixarr, graysize);
+    gettimeofday(&end, NULL);
 
+//print out timing results for sequential grayscale 
+    printf("Grayscale_seq Run:\n");
+    printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
+    t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
+    printf("    Elapsed time: %ld us\n", t_us);
+    t_us_total += t_us;
+
+//write out ppm of grayscale image
     if (printPPMs){
-        //print out grayscale image
         char ppm_grayed[20] = "1_grayscale_s.ppm";
         status = writePPM(grayed_pixarr, graysize, ppm_grayed, 0);
     }
 
-
     /////////////////////////////////////////////////////////////////////////////////////
     ///// Step 2: Perform Gaussian Blur /////////////////////////////////////////////////
     /////////////////////////////////////////////////////////////////////////////////////
-        gettimeofday(&start, NULL);
+    gettimeofday(&start, NULL);
 
     float KGaussF[KGaussSize*KGaussSize]= {2., 4.,  5.,  4.,  2., 
                                 4., 9.,  12., 9.,  4., 
@@ -265,10 +260,10 @@ int CannySeq(int printPPMs)
         for (int i = 0; i <KGaussSize*KGaussSize; i++)
             KGaussF[i] = KGaussF[i]/159.;
 
-    //GAUSSIAN BLUR CONVOLUTION
-        doConvoSeq(blurred_pixarr, grayed_pixarr, KGaussF, IMGwidth, IMGheight, KGaussSize);
+//GAUSSIAN BLUR CONVOLUTION
+    doConvoSeq(blurred_pixarr, grayed_pixarr, KGaussF, IMGwidth, IMGheight, KGaussSize);
 
-        gettimeofday(&end, NULL);
+    gettimeofday(&end, NULL);
         printf("GaussBlur_seq Run:\n");
         printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
