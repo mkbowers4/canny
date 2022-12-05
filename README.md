@@ -71,7 +71,7 @@ NOTES FOR CANNYCUDA (GPU)
 
     5) to build cannycuda
 
-        cd proj/builds
+        cd proj/build
         cmake ..
         make
     
