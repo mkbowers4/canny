@@ -735,12 +735,6 @@ while (iter < iterations){
 }
 
 
-
-
-
-
-
-
 int writePPM (uint8_t* arr, int size, char* FILENAME, int mode){
     //mode = 0 for color data, mode = 1 for grayscaled data
     int count=0;
