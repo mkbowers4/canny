@@ -7,6 +7,7 @@
 #include <math.h>
 #include <wb.h>
 
+#define USE_TIMES
 
 //#define PPM
 #define K1size 5
@@ -28,6 +29,15 @@
 #define lowThreshold (uint8_t)(highThreshold * 0.75)
 
 
+//times
+int totalgraytime = 0;
+float totalgraytime_cuda = 0;
+int totalblurtime = 0;
+float totalblurtime_cuda = 0;
+int totalsobeltime = 0;
+float totalsobeltime_cuda = 0;
+int totalnms_thresh_time = 0;
+float totalnms_thresh__time_cuda = 0;
 
 //image widths and heights gathered from input PPM file
 int IMGwidth=0, IMGheight=0;
@@ -35,6 +45,7 @@ int IMGwidth=0, IMGheight=0;
 //error indices for cudaStatus check functions
 int cudaMemcpy_index = 0;
 int cudaMalloc_index = 0;
+
 
 //convolution kernels
 __constant__ float dev_GaussKernel[K1size * K1size];
@@ -49,7 +60,6 @@ int readPPMData (FILE *fp, uint8_t* pixarr, int size);
 void check_cudaMemcpy(cudaError_t cudaStatus);
 void check_cudaMalloc(cudaError_t cudaStatus);
 
-
 //////////////////////////////////////////KERNELS//////////////////////////////////////////////////////
 __global__ void toGrayScale(uint8_t* rgbImage, uint8_t* grayImage, int IMGwidth, int IMGheight)
 {
@@ -60,15 +70,13 @@ __global__ void toGrayScale(uint8_t* rgbImage, uint8_t* grayImage, int IMGwidth,
         int c_rgb = c*3;
         uint8_t r = rgbImage[c_rgb];
         uint8_t g = rgbImage[c_rgb+1];
-        uint8_t b = rgbImage[c_rgb+2];
+        uint8_t b = rgbImage[c_rgb+2]; 
         grayImage[c] = 0.21f*r + 0.71f*g + 0.07f*b;
     }
 }
 
 __global__ void NMS_THRESHOLD(uint8_t *IN, /*uint8_t *XSOBEL, uint8_t *YSOBEL,*/ float* DIR, /*uint8_t* OUT_NMS,*/ uint8_t* OUT_CANNY, int IMGwidth, int IMGheight)
 {
-    
-
     //NO SHARED IMPLEMENTATION (JUST GLOBAL MEMORY READS)
     /*
     int x = threadIdx.x + blockIdx.x * blockDim.x;
@@ -250,6 +258,8 @@ __global__ void SOBEL(uint8_t *IN, /*uint8_t* XSOBEL, uint8_t* YSOBEL,*/ float* 
                 IMAGEPIXEL = SHARED[ty+y+K2Mask_radius][tx+x+K2Mask_radius];
                 xACCUM += (int)IMAGEPIXEL * dev_xSobelKernel[((K2size * n) + m)];
                 yACCUM += (int)IMAGEPIXEL * dev_ySobelKernel[((K2size * n) + m)];
+                //xACCUM = (int)fma((float)IMAGEPIXEL, (float)dev_xSobelKernel[((K2size * n) + m)], (float)xACCUM);
+                //yACCUM = (int)(fma((float)IMAGEPIXEL, (float)dev_ySobelKernel[((K2size * n) + m)], (float)yACCUM));
             }    
         }
         
@@ -319,7 +329,8 @@ __global__ void GaussBlur(uint8_t *IN, uint8_t *OUT, int IMGwidth, int IMGheight
                 n = K1size - 1 - (x + K1Mask_radius);
                 IMAGEPIXEL = SHARED[ty+y+K1Mask_radius][tx+x+K1Mask_radius];
                 ACCUM += (float)IMAGEPIXEL * dev_GaussKernel[((K1size * n) + m)];
-                //ACCUM += (float)IMAGEPIXEL * (1.0/25.0);
+                //ACCUM = fma((float)IMAGEPIXEL,dev_GaussKernel[((K1size * n) + m)],ACCUM);
+                
             }    
         }
         
@@ -333,8 +344,6 @@ __global__ void GaussBlur(uint8_t *IN, uint8_t *OUT, int IMGwidth, int IMGheight
 
             temp = (uint8_t)tempi;
             OUT[ (row_o * IMGwidth) + col_o] = temp;
-        // if (row_o < IMGheight && col_o < IMGwidth)
-        //     OUT[ (row_o * IMGwidth) + col_o] = SHARED[ty][tx]/2;
         }   
     }
 }
@@ -344,173 +353,66 @@ __global__ void GaussBlur(uint8_t *IN, uint8_t *OUT, int IMGwidth, int IMGheight
 int main (int argc, char *argv[])
 {
     int status;
+    int iter = 0;
 
-    if (argc != 2){
-         printf("Follow Usage: ./cannycuda  PPMs\n");
-         printf("PPMs: 0 = Print only last canny PPM, 1 = Print intermediate PPMs");
+    //host-side pointers
+    uint8_t *dev_pixarr;
+    uint8_t *dev_pixarr_grayed;
+    uint8_t *dev_pixarr_gauss;
+    float *dev_pixarr_dirsobel;
+    uint8_t *dev_pixarr_finalsobel;
+    uint8_t *dev_pixarr_canny;
+
+    //checking input arguments
+    if (argc != 3){
+         printf("Follow Usage: ./cannycuda  PPM ITER\n");
+         printf("PPMs: 0 = Print only last canny PPM, 1 = Print intermediate PPMs\n");
+         printf("ITER: number of iterations\n");
          exit(-1);
     }
 
     int printPPMs = atoi(argv[1]);
+    int iterations = atoi(argv[2]);
     if (printPPMs != 0 && printPPMs != 1){
          printf("ERROR: invalid PPMs argument\n");
          exit(-1);
     }
 
+    //opening file and reading
     FILE *fp;
     if ( !(fp = fopen("img.ppm", "r"))){
         printf("ERROR: Need a .ppm (P6) file named 'img.ppm' in same directory as executable\n");
         exit(-1);
     }
-
-
-//host-side pointers
-    uint8_t *dev_pixarr;
-    uint8_t *dev_pixarr_grayed;
-    uint8_t *dev_pixarr_gauss;
-    //uint8_t *dev_pixarr_xsobel;
-    //uint8_t *dev_pixarr_ysobel;
-    float *dev_pixarr_dirsobel;
-    uint8_t *dev_pixarr_finalsobel;
-    //uint8_t *dev_pixarr_NMS;
-    uint8_t *dev_pixarr_canny;
     
-//get header data & read parameters back
+    //get header data & read parameters back
     readPPMHeader(fp);
     printf("IMG WIDTH = %d  |  IMG HEIGHT = %d\n", IMGwidth, IMGheight);
-    
-//get image sizes based on parameters gathered from PPM files
+
+    //get image sizes based on parameters gathered from PPM files
     int colorsize = (IMGwidth*IMGheight)*3;      
     int graysize = IMGwidth*IMGheight;
 
-//host-side memory allocation
+    //host-side memory allocation
     uint8_t* host_pixarr = (uint8_t*)malloc(colorsize);
     uint8_t* host_pixarr_grayed = (uint8_t*)malloc(graysize);
     uint8_t* host_pixarr_gauss = (uint8_t*)malloc(graysize);
     uint8_t* host_pixarr_finalsobel = (uint8_t*)malloc(graysize);
-    //uint8_t* host_pixarr_NMS = (uint8_t*)malloc(graysize);
     uint8_t* host_pixarr_canny = (uint8_t*)malloc(graysize);
 
-    
-//read image data from img.ppm
+    //read image data from img.ppm
     status = readPPMData(fp, host_pixarr, colorsize);
-    printf("IMG COUNT = %d\n", status);
+    printf("IMG COUNT = %d pixels\n", status);
     (void) fclose(fp);
-    
-    
-//write back original color image with original pixel data
-    if (printPPMs == 1){
-        char ppm_nochange[20] = "0_unchanged_cu.ppm";
-        status = writePPM(host_pixarr, colorsize, ppm_nochange, 1);
-        printf("OUTIMG COUNT (color) = %d\n", status);
-    }
-    
 
-/////////////////////////////////////////////////////////////////////////////////////
-///// Step 0: CUDA SETUP AND CUDAMALLOCS ////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////
+    //5x5 gaussian blur convokernel
+    float host_GaussKernel[K1size*K1size]= { 2./159., 4./159.,  5./159.,  4./159.,  2./159., 
+                                             4./159., 9./159.,  12./159., 9./159.,  4./159., 
+                                             5./159., 12./159., 15./159., 12./159., 5./159., 
+                                             4./159., 9./159.,  12./159., 9./159.,  4./159., 
+                                             2./159., 4./159.,  5./159.,  4./159.,  2./159.};  
 
-    cudaError_t cudaStatus;
-    if (cudaSetDevice(0) != cudaSuccess) 
-        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
-
-//CUDA ALLOCATIONS
-    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr, colorsize*sizeof(uint8_t)));
-    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_grayed, graysize*sizeof(uint8_t)));
-    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_gauss, graysize*sizeof(uint8_t)));
-    //check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_xsobel, graysize*sizeof(uint8_t)));
-    //check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_ysobel, graysize*sizeof(uint8_t)));
-    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_dirsobel, graysize*sizeof(float)));
-    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_finalsobel, graysize*sizeof(uint8_t)));
-    //check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_NMS, graysize*sizeof(uint8_t)));
-    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_canny, graysize*sizeof(uint8_t)));
-
-/////////////////////////////////////////////////////////////////////////////////////
-///// Step 1: Convert to GRAYSCALE //////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////
-
-// Copy host color image data to GPU
-    check_cudaMemcpy( cudaMemcpy(dev_pixarr, host_pixarr, IMGwidth * IMGheight * 3 * sizeof(uint8_t), cudaMemcpyHostToDevice));
-
-// grid and block setup for grayscale cudakernel
-    dim3 dimGrid_gs( ceil((float)IMGwidth / 16), ceil((float)IMGheight / 16) );
-    dim3 dimBlock_gs(16,16);
-
-//kernel launch for grayscale conversion
-    toGrayScale<<<dimGrid_gs, dimBlock_gs>>>(
-        dev_pixarr,
-        dev_pixarr_grayed,
-        IMGwidth, 
-        IMGheight
-    );
-
-//post-kernel launch error checking
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) 
-        fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess)
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
-    
-//copy gpu grayscale data back to host if we're printing a PPM
-    if (printPPMs == 1){
-        check_cudaMemcpy(cudaMemcpy(host_pixarr_grayed, dev_pixarr_grayed, graysize*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-        char ppm_grayed[20] = "0_grayed_cu.ppm";
-        status = writePPM(host_pixarr_grayed, graysize, ppm_grayed, 0);
-        printf("OUTIMG COUNT (gray) = %d\n", status);
-    }
-    
-
-/////////////////////////////////////////////////////////////////////////////////////
-///// Step 2: Perform Gaussian Blur /////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////
-
-//5x5 gaussian blur convokernels
-    float host_GaussKernel[K1size*K1size]={ 2.0, 4.0,  5.0,  4.0,  2.0, 
-                                            4.0, 9.0,  12.0, 9.0,  4.0, 
-                                            5.0, 12.0, 15.0, 12.0, 5.0, 
-                                            4.0, 9.0,  12.0, 9.0,  4.0, 
-                                            2.0, 4.0,  5.0,  4.0,  2.0 };
-//treat gaussian blur 
-    for (int i = 0; i<K1size*K1size; i++)
-        host_GaussKernel[i] = host_GaussKernel[i] / GBlur_Div;
-        
-//copy gaussian blur convokernel to GPU constant memory
-    check_cudaMemcpy(cudaMemcpyToSymbol(dev_GaussKernel, &host_GaussKernel, K1size*K1size*sizeof(float)));
-
-//grid and block setup for gaussian blur cudakernel
-    dim3 dimGrid_gblur( ceil((float)IMGwidth / 16), ceil((float)IMGheight / 16));
-    dim3 dimBlock_gblur(Width_padfor5x5,Width_padfor5x5);
-
-//kernel launch for gaussian blur
-    GaussBlur<<<dimGrid_gblur, dimBlock_gblur>>>(
-         dev_pixarr_grayed, 
-         dev_pixarr_gauss,
-         IMGwidth, 
-         IMGheight
-     );
-
-//post-kernel launch error checking
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess)
-        fprintf(stderr, "GaussBlur launch failed: %s\n", cudaGetErrorString(cudaStatus));
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess)
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching GaussBlur\n", cudaStatus);
-    
-//copy gpu gaussian blur data back to host if we're printing a PPM
-    if (printPPMs == 1){
-        check_cudaMemcpy(cudaMemcpy(host_pixarr_gauss, dev_pixarr_gauss, graysize*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-        char ppm_blurred[20] = "1_blurred_cu.ppm";
-        status = writePPM(host_pixarr_gauss, graysize, ppm_blurred, 0);
-        printf("OUTIMG COUNT (blur) = %d\n", status);
-    }
-    
-/////////////////////////////////////////////////////////////////////////////////////
-///// Step 3: Perform Sobel Edge Detection //////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////
-
-//3x3 sobel convokernels
+    //3x3 sobel convokernels
     int host_xSobelKernel[K2size*K2size] = {-1, 0, 1,
                                             -2, 0, 2, 
                                             -1, 0, 1};
@@ -518,97 +420,319 @@ int main (int argc, char *argv[])
                                             0, 0, 0, 
                                            -1,-2,-1};
 
-//copy sobel edge convokernels to GPU constant memory
+    //commit convokernels to GPU constant memory
     check_cudaMemcpy(cudaMemcpyToSymbol(dev_xSobelKernel, &host_xSobelKernel, K2size*K2size*sizeof(int)));
     check_cudaMemcpy(cudaMemcpyToSymbol(dev_ySobelKernel, &host_ySobelKernel, K2size*K2size*sizeof(int)));
-    
-//grid and block setup for sobel cudakernel
-    dim3 dimGrid_sobel( ceil((float)IMGwidth / 16), ceil((float)IMGheight / 16));
-    dim3 dimBlock_sobel(Width_padfor3x3,Width_padfor3x3);
+    check_cudaMemcpy(cudaMemcpyToSymbol(dev_GaussKernel, &host_GaussKernel, K1size*K1size*sizeof(float)));
 
-//kernel launch for sobel
-    SOBEL<<<dimGrid_sobel, dimBlock_sobel>>>(
-         dev_pixarr_gauss, 
-         /*dev_pixarr_xsobel,*/
-         /*dev_pixarr_ysobel,*/
-         dev_pixarr_dirsobel,
-         dev_pixarr_finalsobel,
-         IMGwidth, 
-         IMGheight
-    );
+    //CUDA ALLOCATIONS
+    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr, colorsize*sizeof(uint8_t)));
+    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_grayed, graysize*sizeof(uint8_t)));
+    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_gauss, graysize*sizeof(uint8_t)));
+    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_dirsobel, graysize*sizeof(float)));
+    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_finalsobel, graysize*sizeof(uint8_t)));
+    check_cudaMalloc( cudaMalloc((void**)&dev_pixarr_canny, graysize*sizeof(uint8_t)));
 
-//post-kernel launch error checking
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) 
-        fprintf(stderr, "Sobel launch failed: %s\n", cudaGetErrorString(cudaStatus));
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) 
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching Sobel!\n", cudaStatus);
-        
-//copy gpu sobel data back to host if we're printing a PPM
+    //write back original color image with original pixel data
     if (printPPMs == 1){
-        check_cudaMemcpy(cudaMemcpy(host_pixarr_finalsobel, dev_pixarr_finalsobel, graysize*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-        char ppm_sobel[20] = "2_sobel_cu.ppm";
-        status = writePPM(host_pixarr_finalsobel, graysize, ppm_sobel, 0);
-        printf("OUTIMG COUNT (sobel) = %d\n", status);
+        char ppm_nochange[20] = "0_unchanged_cu.ppm";
+        status = writePPM(host_pixarr, colorsize, ppm_nochange, 1);
+        printf("OUTIMG COUNT (color) = %d\n pixels", status);
     }
 
-/////////////////////////////////////////////////////////////////////////////////////
-///// Step 4: Perform Non-Maximum Suppression & Hysteresis Thresholding /////////////
-/////////////////////////////////////////////////////////////////////////////////////
-
-//grid and block setup for NMS & thresholding cudakernel
-    dim3 dimGrid_NMS( ceil((float)IMGwidth / 16), ceil((float)IMGheight / 16));
-    dim3 dimBlock_NMS(Width_padfor3x3,Width_padfor3x3);
-
-//kernel launch for NMS & thresholding
-    NMS_THRESHOLD<<<dimGrid_NMS, dimBlock_NMS>>>(
-        dev_pixarr_finalsobel,
-        /*dev_pixarr_xsobel,*/
-        /*dev_pixarr_ysobel,*/
-        dev_pixarr_dirsobel,
-        /*dev_pixarr_NMS,*/
-        dev_pixarr_canny,
-        IMGwidth,
-        IMGheight
-    );
-
-//post-kernel launch error checking
-    cudaStatus = cudaGetLastError();
-    if (cudaStatus != cudaSuccess) 
-        fprintf(stderr, "NMS launch failed: %s\n", cudaGetErrorString(cudaStatus));
-    cudaStatus = cudaDeviceSynchronize();
-    if (cudaStatus != cudaSuccess) 
-        fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching NMS!\n", cudaStatus);
+        cudaError_t cudaStatus;
+    if (cudaSetDevice(0) != cudaSuccess) 
+        fprintf(stderr, "cudaSetDevice failed!  Do you have a CUDA-capable GPU installed?");
         
-//copy canny data back to host to print final PPM
-    check_cudaMemcpy(cudaMemcpy(host_pixarr_canny, dev_pixarr_canny, graysize*sizeof(uint8_t), cudaMemcpyDeviceToHost));
-    char ppm_CANNY[20] = "4_CANNY_cu.ppm";
-    status = writePPM(host_pixarr_canny, graysize, ppm_CANNY, 0);
-    printf("OUTIMG COUNT (CANNY) = %d\n", status);
+
+while (iter < iterations){
+
+        
+
+    /////////////////////////////////////////////////////////////////////////////////////
+    ///// Step 0: CUDA SETUP AND CUDAMALLOCS ////////////////////////////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////
+
+    //timing 
+        #ifdef USE_TIMES
+            struct timeval start, end; 
+            long t_us, t_us_total = 0;
+        #endif
+
+    //CUDA timing
+        gettimeofday(&start, NULL);
+        cudaEvent_t cudastart, cudastop;
+        float cudatime;
+        cudaEventCreate(&cudastart);
+        cudaEventCreate(&cudastop);
 
 
-//frees
 
+    /////////////////////////////////////////////////////////////////////////////////////
+    ///// Step 1: Convert to GRAYSCALE //////////////////////////////////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////
+
+    // Copy host color image data to GPU
+        check_cudaMemcpy( cudaMemcpy(dev_pixarr, host_pixarr, IMGwidth * IMGheight * 3 * sizeof(uint8_t), cudaMemcpyHostToDevice));
+
+    // grid and block setup for grayscale cudakernel
+        dim3 dimGrid_gs( ceil((float)IMGwidth / 16), ceil((float)IMGheight / 16) );
+        dim3 dimBlock_gs(16,16);
+
+        cudaEventRecord(cudastart);
+
+    //kernel launch for grayscale conversion
+        toGrayScale<<<dimGrid_gs, dimBlock_gs>>>(
+            dev_pixarr,
+            dev_pixarr_grayed,
+            IMGwidth, 
+            IMGheight
+        );
+
+    //post-kernel launch error checking
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) 
+            fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess)
+            fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching addKernel!\n", cudaStatus);
+        
+        cudaEventRecord(cudastop);
+        cudaEventSynchronize(cudastop);
+        cudaEventElapsedTime(&cudatime, cudastart, cudastop);
+
+        gettimeofday(&end, NULL);
+        
+    //print out timing results for cuda grayscale 
+        printf("Grayscale_cuda Run:\n");
+        printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
+        t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
+        printf("    Elapsed time: %ld us\n", t_us);
+        t_us_total += t_us;
+        printf("    CUDAKERNEL TIME = %f ms\n",cudatime);
+        
+        totalgraytime += t_us;
+        totalgraytime_cuda += cudatime;
+
+    //copy gpu grayscale data back to host if we're printing a PPM
+        if (printPPMs == 1){
+            check_cudaMemcpy(cudaMemcpy(host_pixarr_grayed, dev_pixarr_grayed, graysize*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+            char ppm_grayed[20] = "0_grayed_cu.ppm";
+            status = writePPM(host_pixarr_grayed, graysize, ppm_grayed, 0);
+            printf("OUTIMG COUNT (gray) = %d pixels\n", status);
+        }
+
+        
+    /////////////////////////////////////////////////////////////////////////////////////
+    ///// Step 2: Perform Gaussian Blur /////////////////////////////////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////
+
+
+        gettimeofday(&start, NULL);
+
+    //grid and block setup for gaussian blur cudakernel
+        dim3 dimGrid_gblur( ceil((float)IMGwidth / 16), ceil((float)IMGheight / 16));
+        dim3 dimBlock_gblur(Width_padfor5x5,Width_padfor5x5);
+
+        cudaEventRecord(cudastart);
+    //kernel launch for gaussian blur
+        GaussBlur<<<dimGrid_gblur, dimBlock_gblur>>>(
+            dev_pixarr_grayed, 
+            dev_pixarr_gauss,
+            IMGwidth, 
+            IMGheight
+        );
+
+    //post-kernel launch error checking
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess)
+            fprintf(stderr, "GaussBlur launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess)
+            fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching GaussBlur\n", cudaStatus);
+        
+        cudaEventRecord(cudastop);
+        cudaEventSynchronize(cudastop);
+        cudaEventElapsedTime(&cudatime, cudastart, cudastop);
+
+        gettimeofday(&end, NULL);
+
+        
+    //print out timing results for sequential grayscale 
+        printf("GaussianBlur_cuda Run:\n");
+        printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
+        t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
+        printf("    Elapsed time: %ld us\n", t_us);
+        t_us_total += t_us;
+        printf("    CUDAKERNEL TIME = %f ms\n",cudatime);
+
+        totalblurtime += t_us;
+        totalblurtime_cuda += cudatime;
+
+    //copy gpu gaussian blur data back to host if we're printing a PPM
+        if (printPPMs == 1){
+            check_cudaMemcpy(cudaMemcpy(host_pixarr_gauss, dev_pixarr_gauss, graysize*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+            char ppm_blurred[20] = "1_blurred_cu.ppm";
+            status = writePPM(host_pixarr_gauss, graysize, ppm_blurred, 0);
+            printf("OUTIMG COUNT (blur) = %d pixels\n", status);
+        }
+        
+    /////////////////////////////////////////////////////////////////////////////////////
+    ///// Step 3: Perform Sobel Edge Detection //////////////////////////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////
+
+        gettimeofday(&start, NULL);
+
+
+        
+    //grid and block setup for sobel cudakernel
+        dim3 dimGrid_sobel( ceil((float)IMGwidth / 16), ceil((float)IMGheight / 16));
+        dim3 dimBlock_sobel(Width_padfor3x3,Width_padfor3x3);
+
+        cudaEventRecord(cudastart);
+
+    //kernel launch for sobel
+        SOBEL<<<dimGrid_sobel, dimBlock_sobel>>>(
+            dev_pixarr_gauss, 
+            dev_pixarr_dirsobel,
+            dev_pixarr_finalsobel,
+            IMGwidth, 
+            IMGheight
+        );
+
+    //post-kernel launch error checking
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) 
+            fprintf(stderr, "Sobel launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess) 
+            fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching Sobel!\n", cudaStatus);
+
+        cudaEventRecord(cudastop);
+        cudaEventSynchronize(cudastop);
+        cudaEventElapsedTime(&cudatime, cudastart, cudastop);
+
+        gettimeofday(&end, NULL);
+
+        printf("Sobel_Cuda Run:\n");
+        printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
+        t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
+        printf("    Elapsed time: %ld us\n", t_us);
+        t_us_total += t_us;
+        printf("    CUDAKERNEL TIME = %f ms\n",cudatime);
+
+        totalsobeltime += t_us;
+        totalsobeltime_cuda += cudatime;
+
+    //copy gpu sobel data back to host if we're printing a PPM
+        if (printPPMs == 1){
+            check_cudaMemcpy(cudaMemcpy(host_pixarr_finalsobel, dev_pixarr_finalsobel, graysize*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+            char ppm_sobel[20] = "2_sobel_cu.ppm";
+            status = writePPM(host_pixarr_finalsobel, graysize, ppm_sobel, 0);
+            printf("OUTIMG COUNT (sobel) = %d pixels\n", status);
+        }
+
+    /////////////////////////////////////////////////////////////////////////////////////
+    ///// Step 4: Perform Non-Maximum Suppression & Hysteresis Thresholding /////////////
+    /////////////////////////////////////////////////////////////////////////////////////
+
+        gettimeofday(&start, NULL);
+
+    //grid and block setup for NMS & thresholding cudakernel
+        dim3 dimGrid_NMS( ceil((float)IMGwidth / 16), ceil((float)IMGheight / 16));
+        dim3 dimBlock_NMS(Width_padfor3x3,Width_padfor3x3);
+
+        cudaEventRecord(cudastart);
+    //kernel launch for NMS & thresholding
+        NMS_THRESHOLD<<<dimGrid_NMS, dimBlock_NMS>>>(
+            dev_pixarr_finalsobel,
+            dev_pixarr_dirsobel,
+            dev_pixarr_canny,
+            IMGwidth,
+            IMGheight
+        );
+
+    //post-kernel launch error checking
+        cudaStatus = cudaGetLastError();
+        if (cudaStatus != cudaSuccess) 
+            fprintf(stderr, "NMS launch failed: %s\n", cudaGetErrorString(cudaStatus));
+        cudaStatus = cudaDeviceSynchronize();
+        if (cudaStatus != cudaSuccess) 
+            fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching NMS!\n", cudaStatus);
+        
+        cudaEventRecord(cudastop);
+        cudaEventSynchronize(cudastop);
+        cudaEventElapsedTime(&cudatime, cudastart, cudastop);
+
+        check_cudaMemcpy(cudaMemcpy(host_pixarr_canny, dev_pixarr_canny, graysize*sizeof(uint8_t), cudaMemcpyDeviceToHost));
+
+        gettimeofday(&end, NULL);
+        printf("NMS&Thresholding Run:\n");
+        printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
+        t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
+        printf("    Elapsed time: %ld us\n", t_us);
+        t_us_total += t_us;
+        printf("    CUDAKERNEL TIME = %f ms\n",cudatime);
+
+        totalnms_thresh_time += t_us;
+        totalnms_thresh__time_cuda += cudatime;
+        printf("Full CUDA Run #%d:\n", iter);
+        printf("    Total Elapsed time: %ld us\n", t_us_total);
+
+    //copy canny data back to host to print final PPM
+        char ppm_CANNY[20] = "4_CANNY_cu.ppm";
+        status = writePPM(host_pixarr_canny, graysize, ppm_CANNY, 0);
+        printf("OUTIMG COUNT (CANNY) = %d pixels\n\n", status);
+
+
+    //frees
+
+        //cudaEventDestroy(cudastart);
+        //cudaEventDestroy(cudastop);
+        iter++;
+}   
+
+//avg time prints
+    printf("***************************************************\n");
+    printf("*******************AVG RUN STATS*******************\n");
+    printf("***************************************************\n");
+    printf("Total# of iterations = %d\n\n", iter);
+    printf("GRAYSCALE:\n");
+    printf("    Total Elapsed time (CUDAKERNELS + MEMCPYs): %f ms\n", (totalgraytime/iter)/1000.0);
+    printf("    CUDAKERNEL TIME (CUDAKERNELS ONLY):         %f ms\n",totalgraytime_cuda/iter);
+    printf("GAUSSIAN BLUR:\n");
+    printf("    Total Elapsed time (CUDAKERNELS + MEMCPYs): %f ms\n", (totalblurtime/iter)/1000.0);
+    printf("    CUDAKERNEL TIME (CUDAKERNELS ONLY):         %f ms\n",totalblurtime_cuda/iter);
+    printf("SOBEL:\n");
+    printf("    Total Elapsed time (CUDAKERNELS + MEMCPYs): %f ms\n", (totalsobeltime/iter)/1000.0);
+    printf("    CUDAKERNEL TIME (CUDAKERNELS ONLY):         %f ms\n",totalsobeltime_cuda/iter);
+    printf("NMS+THRESHOLDING:\n");
+    printf("    Total Elapsed time (CUDAKERNELS + MEMCPYs): %f ms\n", (totalnms_thresh_time/iter)/1000.0);
+    printf("    CUDAKERNEL TIME (CUDAKERNELS ONLY):         %f ms\n\n",totalnms_thresh__time_cuda/iter);
+
+    int totaltime = (totalgraytime/iter)+(totalblurtime/iter)+(totalsobeltime/iter)+(totalnms_thresh_time/iter);
+    float totalcudakerneltime = (totalgraytime_cuda/iter)+(totalblurtime_cuda/iter)+(totalsobeltime_cuda/iter)+(totalnms_thresh__time_cuda/iter);
+
+    printf("TOTAL AVG TIME (CUDAKERNELS + MEMCPYs): %f ms\n", (totaltime)/1000.0);
+    printf("TOTAL AVG TIME (CUDAKERNELS ONLY):      %f ms\n\n",totalcudakerneltime);
+    printf("***************************************************\n");
+    printf("*******************IMG STATS***********************\n");
+    printf("***************************************************\n");
+    printf("    IMG WIDTH =    %d \n", IMGwidth);
+    printf("    IMG HEIGHT =   %d \n", IMGheight);
+    printf("    PIXEL COUNT =  %d \n", (IMGwidth*IMGheight));
     free(host_pixarr);
     free(host_pixarr_grayed);
     free(host_pixarr_gauss);
     free(host_pixarr_finalsobel);
-    //free(host_pixarr_NMS);
     free(host_pixarr_canny);
 
     cudaFree(dev_pixarr);
     cudaFree(dev_pixarr_grayed);
     cudaFree(dev_pixarr_gauss);
-    //cudaFree(dev_pixarr_xsobel);
-    //cudaFree(dev_pixarr_ysobel);
     cudaFree(dev_pixarr_finalsobel);
-    //cudaFree(dev_pixarr_NMS);
     cudaFree(dev_pixarr_canny);
 }
-
-
-
 
 
 
@@ -653,8 +777,6 @@ int readPPMData (FILE *fp, uint8_t* pixarr, int size){
     count = fread(pixarr, 1, (size_t)size, fp);
     return count;
 }
-
-
 
 void check_cudaMemcpy(cudaError_t cudaStatus){
     if (cudaStatus != cudaSuccess)

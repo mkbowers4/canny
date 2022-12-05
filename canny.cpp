@@ -14,6 +14,18 @@
 #define clamp_0_255(x) (min(max((x), 0), 255))
 #define clamp_175(x) (fmin(x, 175))
 
+int totalgraytime_seq = 0;
+int totalblurtime_seq = 0;
+int totalsobeltime_seq = 0;
+int totalnms_thresh_time_seq = 0;
+int totaltime_seq = 0;
+
+int totalgraytime_TBB = 0;
+int totalblurtime_TBB= 0;
+int totalsobeltime_TBB = 0;
+int totalnms_thresh_time_TBB = 0;
+int totaltime_TBB = 0;
+
 int IMGwidth, IMGheight;
 typedef enum
 {
@@ -42,35 +54,86 @@ int readPPMData (FILE *fp, uint8_t* pixarr, int size);
 //MAIN
 int main (int argc, char *argv[]) {
     int status;
-    if (argc != 3){
-        printf("Follow Usage: ./canny MODE PPMs\n");
-        printf("MODE: 0 = Sequential, 1 = TBB, 2 = Both\n");
-        printf("PPMs: 0 = Print only canny PPM, 1 = Print all PPMs");
-        printf("T:    0 = No Times,   1 = Times\n");
+    int iter=0;
+    if (argc != 4){
+        printf("Follow Usage: ./canny MODE PPM ITER\n");
+        printf("    MODE: 0 = Sequential, 1 = TBB, 2 = Both\n");
+        printf("    PPM:  0 = Print only canny PPM, 1 = Print all PPMs\n");
+        printf("    ITER: number of iterations\n");
+        printf("recommendation: consider times only when PPM = 0\n");
         exit(-1);
     }
     int mode = atoi(argv[1]);
     int printPPMs = atoi(argv[2]);
+    int iterations = atoi(argv[3]);
 
     if (printPPMs != 0 && printPPMs != 1){
          printf("ERROR: invalid PPMs argument\n");
          exit(-1);
     }
     if (mode == 0)
-        status = CannySeq(printPPMs);
+        while (iter < iterations){
+            status = CannySeq(printPPMs);
+            iter++;
+        }
+        
     else if (mode == 1)
-        status = CannyTBB(printPPMs);
+        while (iter < iterations){
+            status = CannyTBB(printPPMs);
+            iter++;
+        }
+        
     else if (mode == 2){
-        status = CannySeq(printPPMs);
-        status = CannyTBB(printPPMs);
+        while (iter < iterations){
+            status = CannySeq(printPPMs);
+            status = CannyTBB(printPPMs);
+            iter++;
+        }
     }
     else{
         printf("ERROR: invalid MODE argument\n");
         exit(-1);
     }
     
+    //print average times
+    printf("\n***************************************************\n");
+    printf("*******************AVG RUN STATS*******************\n");
+    printf("***************************************************\n");
+    printf("GRAYSCALE:\n");
+    if (mode == 0 || mode == 2)
+        printf("    Seq: %f ms\n", (totalgraytime_seq/iter)/1000.0);
+    if (mode == 1 || mode == 2)
+        printf("    TBB: %f ms\n", (totalgraytime_TBB/iter)/1000.0);
+    printf("GAUSSIAN BLUR:\n");
+    if (mode == 0 || mode == 2)
+        printf("    Seq: %f ms\n", (totalblurtime_seq/iter)/1000.0);
+    if (mode == 1 || mode == 2)
+        printf("    TBB: %f ms\n", (totalblurtime_TBB/iter)/1000.0);
+    printf("SOBEL:\n");
+    if (mode == 0 || mode == 2)
+        printf("    Seq: %f ms\n", (totalsobeltime_seq/iter)/1000.0);
+    if (mode == 1 || mode == 2)
+        printf("    TBB: %f ms\n", (totalsobeltime_TBB/iter)/1000.0);
+    printf("NMS+THRESHOLDING:\n");
+    if (mode == 0 || mode == 2)
+        printf("    Seq: %f ms\n", (totalnms_thresh_time_seq/iter)/1000.0);
+    if (mode == 1 || mode == 2)
+        printf("    TBB: %f ms\n\n", (totalnms_thresh_time_TBB/iter)/1000.0);
+    
+    if (mode == 0 || mode == 2)
+        printf("TOTAL AVG Sequential Time:    %f ms\n", (totaltime_seq/iter)/1000.0);
+    if (mode == 1 || mode == 2)
+        printf("TOTAL AVG TBB(Parallel) Time: %f ms\n",(totaltime_TBB/iter)/1000.0);
+
+    printf("\n***************************************************\n");
+    printf("*******************IMG STATS***********************\n");
+    printf("***************************************************\n");
+    printf("    IMG WIDTH =    %d \n", IMGwidth);
+    printf("    IMG HEIGHT =   %d \n", IMGheight);
+    printf("    PIXEL COUNT =  %d \n", (IMGwidth*IMGheight));
+
     if (status != 0) printf("Not working!\n");
-    else printf("Done!");
+    else printf("Done!\n");
 
 }
 
@@ -176,25 +239,26 @@ void doConvoSeq(uint8_t* output, uint8_t *IMGarr, float* K, int IMGwidth, int IM
 int CannySeq(int printPPMs)
 {
     int status; 
-//NEED a ppm file named img.ppm in the same directory, which is set up to be read from
+
+    //NEED a ppm file named img.ppm in the same directory, which is set up to be read from
     FILE *fp;
     if ( !(fp = fopen("img.ppm", "r"))){
         printf("ERROR: Need a .ppm (P6) file named 'img.ppm' in same directory as executable\n");
         exit(-1);
     }
 
-//get header data (width and height of image) from PPM input
+    //get header data (width and height of image) from PPM input
     readPPMHeader(fp);
     printf("IMG WIDTH = %d\n", IMGwidth);
     printf("IMG HEIGHT = %d\n", IMGheight);
 
-//PPM uses 1R, 1G, 1B per pixel
-//only keep track of one pixel for grayscale calculations
+    //PPM uses 1R, 1G, 1B per pixel
+    //only keep track of one pixel for grayscale calculations
     int colorsize = (IMGwidth*IMGheight)*3;      
     int graysize = IMGheight*IMGwidth;
 
-//all memory allocations
-//x and y sobel are split up to print separate .PPMs for each
+    //all memory allocations
+    //x and y sobel are split up to print separate .PPMs for each
     uint8_t* pixarr = (uint8_t*)malloc(colorsize);
     uint8_t* grayed_pixarr = (uint8_t*)malloc(graysize);
     uint8_t* blurred_pixarr = (uint8_t*)malloc(graysize);
@@ -208,39 +272,40 @@ int CannySeq(int printPPMs)
     uint8_t* afterDthr = (uint8_t*)calloc(graysize, sizeof(uint8_t));
     uint8_t* afterDthr2 = (uint8_t*)calloc(graysize, sizeof(uint8_t));
     
-//get pixel data from PPM input
+    //get pixel data from PPM input
     status = readPPMData(fp, pixarr, colorsize);
     printf("IMG COUNT = %d\n", status);
     (void) fclose(fp);
 
-//write back original color image to new PPM
+    //write back original color image to new PPM
     if (printPPMs){
         char ppm_nochange[20] = "0_original_s.ppm";
         status = writePPM(pixarr, colorsize, ppm_nochange, 1);
         printf("OUTIMG COUNT = %d\n", status);
     }
 
-//timing 
+    //timing 
     #ifdef USE_TIMES
         struct timeval start, end; 
         long t_us, t_us_total = 0;
     #endif
 
-/////////////////////////////////////////////////////////////////////////////////////
-///// Step 1: Convert to GRAYSCALE //////////////////////////////////////////////////
-/////////////////////////////////////////////////////////////////////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////
+    ///// Step 1: Convert to GRAYSCALE //////////////////////////////////////////////////
+    /////////////////////////////////////////////////////////////////////////////////////
     gettimeofday(&start, NULL);
     status = doGrayscaleSeq(pixarr, grayed_pixarr, graysize);
     gettimeofday(&end, NULL);
 
-//print out timing results for sequential grayscale 
+    //print out timing results for sequential grayscale 
     printf("Grayscale_seq Run:\n");
     printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
     t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
     printf("    Elapsed time: %ld us\n", t_us);
     t_us_total += t_us;
+    totalgraytime_seq += t_us;
 
-//write out ppm of grayscale image
+    //write out ppm of grayscale image
     if (printPPMs){
         char ppm_grayed[20] = "1_grayscale_s.ppm";
         status = writePPM(grayed_pixarr, graysize, ppm_grayed, 0);
@@ -251,16 +316,13 @@ int CannySeq(int printPPMs)
     /////////////////////////////////////////////////////////////////////////////////////
     gettimeofday(&start, NULL);
 
-    float KGaussF[KGaussSize*KGaussSize]= {2., 4.,  5.,  4.,  2., 
-                                4., 9.,  12., 9.,  4., 
-                                5., 12., 15., 12., 5., 
-                                4., 9.,  12., 9.,  4., 
-                                2., 4.,  5.,  4.,  2};     
-    //treat gauss
-        for (int i = 0; i <KGaussSize*KGaussSize; i++)
-            KGaussF[i] = KGaussF[i]/159.;
+    float KGaussF[KGaussSize*KGaussSize]= {2./159., 4./159.,  5./159.,  4./159.,  2./159., 
+                                           4./159., 9./159.,  12./159., 9./159.,  4./159., 
+                                           5./159., 12./159., 15./159., 12./159., 5./159., 
+                                           4./159., 9./159.,  12./159., 9./159.,  4./159., 
+                                           2./159., 4./159.,  5./159.,  4./159.,  2./159.};     
 
-//GAUSSIAN BLUR CONVOLUTION
+    //GAUSSIAN BLUR CONVOLUTION
     doConvoSeq(blurred_pixarr, grayed_pixarr, KGaussF, IMGwidth, IMGheight, KGaussSize);
 
     gettimeofday(&end, NULL);
@@ -269,6 +331,7 @@ int CannySeq(int printPPMs)
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
+        totalblurtime_seq += t_us;
 
     if (printPPMs){
     //print blurred image
@@ -315,7 +378,10 @@ int CannySeq(int printPPMs)
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
-        
+        totalsobeltime_seq += t_us;
+
+     
+
     if (printPPMs){
     //FINAL SOBEL PRINT
             char ppm_finalSobel[20] = "5_finalSobel_s.ppm";
@@ -360,12 +426,6 @@ int CannySeq(int printPPMs)
 
                 if
                 (
-                    /*
-                    ( (dir < 0.3927) && (finalSobel_pixarr[center] >= finalSobel_pixarr[EE] && finalSobel_pixarr[center] >= finalSobel_pixarr[WW])) ||
-                    ( (dir > 0.3927) && (dir < 1.1781) && (finalSobel_pixarr[center] >= finalSobel_pixarr[SS] && finalSobel_pixarr[center] >= finalSobel_pixarr[NN])) ||
-                    ( (dir > 1.1781) && ((finalSobel_pixarr[center] >= finalSobel_pixarr[SW] && finalSobel_pixarr[center] >= finalSobel_pixarr[NE]) && (finalSobel_pixarr[center] >= finalSobel_pixarr[SE] && finalSobel_pixarr[center] >= finalSobel_pixarr[NW])))
-                    */
-                    
                     ( (dir < 0.3927) && (finalSobel_pixarr[center] >= finalSobel_pixarr[EE] && finalSobel_pixarr[center] >= finalSobel_pixarr[WW])) ||
                     ( (dir > 0.3927) && (dir < 1.1781) && ( (finalSobel_pixarr[center] >= finalSobel_pixarr[SW] && finalSobel_pixarr[center] >= finalSobel_pixarr[NE]) || (finalSobel_pixarr[center] >= finalSobel_pixarr[SE] && finalSobel_pixarr[center] >= finalSobel_pixarr[NW]))) ||
                     ( (dir > 1.1781) && (finalSobel_pixarr[center] >= finalSobel_pixarr[SS] && finalSobel_pixarr[center] >= finalSobel_pixarr[NN]))
@@ -375,13 +435,14 @@ int CannySeq(int printPPMs)
                     afterNMS[center] = 0;
             }
         }
-
         gettimeofday(&end, NULL);
+
         printf("NMS_seq Run:\n");
         printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
+        totalnms_thresh_time_seq += t_us;
 
     //after NMS, we need to classify pixels as strong, weak or non-border pixels
     //pixels above high threshold are STRONG border pixels
@@ -390,6 +451,7 @@ int CannySeq(int printPPMs)
         uint8_t highThreshold = (uint8_t)(255*0.3);
         uint8_t lowThreshold = (uint8_t)(highThreshold*0.75);
 
+    //these steps are only carried out if we're printing the PPMs. They simply illustrate the effects of the pixel classification
     if (printPPMs){
         //print out NMS results for PPM 
         char ppm_nms[20] = "6_nms_s.ppm";
@@ -434,6 +496,8 @@ int CannySeq(int printPPMs)
         char ppm_dthr2[20] = "7_dualthresh_s.ppm";
         status = writePPM(afterDthr2, graysize, ppm_dthr2, 0);
     }
+
+
     /////////////////////////////////////////////////////////////////////////////////////////////////////
     ///// Step 5: Perform Double Thresholding & Hysteresis Thresholding /////////////////////////////////
     /////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -442,8 +506,10 @@ int CannySeq(int printPPMs)
 
         //pixels above high threshold are STRONG border pixels
         //pixels in between high and low thresholds are WEAK pixels
-        //pixels below low threshold are NOT border pixels
+        //pixels below low threshold are NOT EDGE pixels
         
+        //this excludes a thin outer border around the image, which was originally darkened due to the gaussian blur
+        //and highlighted by the Sobel operation. These pixels that are excluded are kept as 0 from the initial calloc. 
         for (int i=2; i < IMGheight-2; i++){
             for (int j=2; j < IMGwidth-2; j++){
 
@@ -457,10 +523,11 @@ int CannySeq(int printPPMs)
                 int NE = NN - 1;
                 int SW = SS + 1;
                 int SE = SS - 1;
-                if (afterNMS[center] < lowThreshold)        //suppress no edges
+                if (afterNMS[center] < lowThreshold)        //suppress non_edge pixels
                     afterHyst[center] = 0;
 
-                //now we need to consider others edges. If any other surrounding edges are strong, saturate the weak edge as you would a strong edge
+                //now we need to consider others edges. If the center pixel is above the high threshold 
+                //or is a weak pixel that neighors a strong, saturate to 255
                 else if (
                     (afterNMS[center] > highThreshold) || (afterNMS[NN] > highThreshold) || (afterNMS[SS] > highThreshold) || 
                     (afterNMS[EE] > highThreshold) || (afterNMS[WW] > highThreshold) ||
@@ -469,21 +536,23 @@ int CannySeq(int printPPMs)
                 )
                     afterHyst[center] = 255;
 
-                //else, we remove weak edge
+                //else, we take weak edge pixel to 0
                 else
                     afterHyst[center] = 0;
             }
         }
-
-
         gettimeofday(&end, NULL);
+
         printf("Thresh&Hysteresis_seq Run:\n");
         printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
+        totalnms_thresh_time_seq += t_us;
+
         printf("Full Sequential Run:\n");
         printf("    Total Elapsed time: %ld us\n", t_us_total);
+        totaltime_seq += t_us_total;
 
         //print out PPM for NMS
         char ppm_hyst[20] = "OUT_canny_s.ppm";
@@ -504,7 +573,8 @@ int CannySeq(int printPPMs)
         return 0;
 }
 
-uint8_t doThresh_tbb(uint8_t* afterNMS, int i, int j, uint8_t highThreshold, uint8_t lowThreshold){
+uint8_t doThresh_tbb(uint8_t* afterNMS, int i, int j, uint8_t highThreshold, uint8_t lowThreshold)
+{
     int center = IMGwidth*i + j;
     int NN = center - IMGwidth;
     int SS = center + IMGwidth;
@@ -533,41 +603,6 @@ uint8_t doThresh_tbb(uint8_t* afterNMS, int i, int j, uint8_t highThreshold, uin
 
 }
 
-
-/*
-gettimeofday(&start, NULL);
-
-        //because of the side effect of gaussian blur darkening edges of image, we will ignore the border pixels.
-        for (int i=2; i < IMGheight-2; i++){
-            for (int j=2; j < IMGwidth-2; j++){
-
-                //take current center of pixel, and derive all neighboring indices from it
-                int center = IMGwidth*i + j;
-                int NN = center - IMGwidth;
-                int SS = center + IMGwidth;
-                int WW = center + 1;
-                int EE = center - 1;
-                int NW = NN + 1;
-                int NE = NN - 1;
-                int SW = SS + 1;
-                int SE = SS - 1;
-
-                float dir = atan2(ySobel_pixarr[center], xSobel_pixarr[center]);
-
-                if
-                (
-                    ( (dir < 0.3927) && (finalSobel_pixarr[center] >= finalSobel_pixarr[EE] && finalSobel_pixarr[center] >= finalSobel_pixarr[WW])) ||
-                    ( (dir > 0.3927) && (dir < 1.1781) && (finalSobel_pixarr[center] >= finalSobel_pixarr[SS] && finalSobel_pixarr[center] >= finalSobel_pixarr[NN])) ||
-                    ( (dir > 1.1781) && ( (finalSobel_pixarr[center] >= finalSobel_pixarr[SW] && finalSobel_pixarr[center] >= finalSobel_pixarr[NE]) && (finalSobel_pixarr[center] >= finalSobel_pixarr[SE] && finalSobel_pixarr[center] >= finalSobel_pixarr[NW])))
-                )
-                    afterNMS[center] = finalSobel_pixarr[center];
-                else
-                    afterNMS[center] = 0;
-            }
-        }
-
-*/
-
 uint8_t doNMS_tbb(uint8_t* finalSobel_pixarr, uint8_t* xSobel_pixarr, uint8_t* ySobel_pixarr, int i, int j){
     int center = IMGwidth*i + j;
     int NN = center - IMGwidth;
@@ -582,7 +617,7 @@ uint8_t doNMS_tbb(uint8_t* finalSobel_pixarr, uint8_t* xSobel_pixarr, uint8_t* y
     if
     (
         ( (dir < 0.3927) && (finalSobel_pixarr[center] >= finalSobel_pixarr[EE] && finalSobel_pixarr[center] >= finalSobel_pixarr[WW])) ||
-        ( (dir > 0.3927) && (dir < 1.1781) && ( (finalSobel_pixarr[center] >= finalSobel_pixarr[SW] && finalSobel_pixarr[center] >= finalSobel_pixarr[NE]) && (finalSobel_pixarr[center] >= finalSobel_pixarr[SE] && finalSobel_pixarr[center] >= finalSobel_pixarr[NW]))) ||
+        ( (dir > 0.3927) && (dir < 1.1781) && ( (finalSobel_pixarr[center] >= finalSobel_pixarr[SW] && finalSobel_pixarr[center] >= finalSobel_pixarr[NE]) || (finalSobel_pixarr[center] >= finalSobel_pixarr[SE] && finalSobel_pixarr[center] >= finalSobel_pixarr[NW]))) ||
         ( (dir > 1.1781) && finalSobel_pixarr[center] >= finalSobel_pixarr[SS] && finalSobel_pixarr[center] >= finalSobel_pixarr[NN])
     )
         return finalSobel_pixarr[center];
@@ -592,7 +627,7 @@ uint8_t doNMS_tbb(uint8_t* finalSobel_pixarr, uint8_t* xSobel_pixarr, uint8_t* y
 
 uint8_t getSobelMagnitude_TBB(uint8_t* xSobel_pixarr, uint8_t* ySobel_pixarr, int i){
     uint8_t x = clamp_175(xSobel_pixarr[i]);
-    uint8_t y = clamp_175(xSobel_pixarr[i]);  
+    uint8_t y = clamp_175(ySobel_pixarr[i]);  
     uint32_t prod = (y*y)+(x*x);
     return (uint8_t)sqrt(prod);
 }
@@ -655,7 +690,6 @@ uint8_t doGrayscaleTBB (uint8_t* oldarr, int i){
     uint8_t newval = 0.21f*r + 0.71f*g + 0.07f*b;
     return newval;
 }
-
 
 int CannyTBB(int printPPMs)
 {
@@ -724,13 +758,12 @@ int CannyTBB(int printPPMs)
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
-
+        totalgraytime_TBB += t_us;
     if (printPPMs){
         //print out grayscale image
         char ppm_grayed[20] = "1_grayscale_p.ppm";
         status = writePPM(grayed_pixarr, graysize, ppm_grayed, 0);
     }
-
 
     ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////
     ///// Step 2: Perform Gaussian Blur ///////////////////////////////////////////////////////////////////////////////
@@ -755,6 +788,7 @@ int CannyTBB(int printPPMs)
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
+        totalblurtime_TBB += t_us;
 
     if (printPPMs){
     //print blurred image
@@ -805,7 +839,8 @@ int CannyTBB(int printPPMs)
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
-        
+        totalsobeltime_TBB += t_us;
+
     if (printPPMs){
     //FINAL SOBEL PRINT
             char ppm_finalSobel[20] = "5_finalSobel_p.ppm";
@@ -838,13 +873,13 @@ int CannyTBB(int printPPMs)
             });    
         });
 
-
         gettimeofday(&end, NULL);
         printf("NMS_tbb Run:\n");
         printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
+        totalnms_thresh_time_TBB += t_us;
 
     //after NMS, we need to classify pixels as strong, weak or non-border pixels
     //pixels above high threshold are STRONG border pixels
@@ -903,21 +938,24 @@ int CannyTBB(int printPPMs)
 
 
         gettimeofday(&start, NULL);
-
+        
         tbb::parallel_for(int(2), int(IMGheight_trunc), [&] (int i){
             tbb::parallel_for(int(2), int(IMGwidth_trunc), [&] (int j){
                 afterHyst[IMGwidth*i + j] = doThresh_tbb(afterNMS, i, j, highThreshold, lowThreshold);
             });    
         });
-
         gettimeofday(&end, NULL);
+
         printf("Thresh&Hysteresis_tbb Run:\n");
         printf("    Start: %ld us    End: %ld us\n", start.tv_usec, end.tv_usec);
         t_us = (end.tv_sec - start.tv_sec)*1000000 + end.tv_usec - start.tv_usec;
         printf("    Elapsed time: %ld us\n", t_us);
         t_us_total += t_us;
+        totalnms_thresh_time_TBB += t_us;
+
         printf("Full Parallel(tbb) Run:\n");
         printf("    Total Elapsed time: %ld us\n", t_us_total);
+        totaltime_TBB += t_us_total;
 
         //print out PPM for NMS
         char ppm_hyst[20] = "OUT_canny_p.ppm";
