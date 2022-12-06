@@ -1,7 +1,6 @@
 # canny
 
-full project here:
-
+Authors: Michael Bowers & Matthew Horvath Jr. 
 
 NOTES FOR PPM FILES
 
