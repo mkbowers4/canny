@@ -158,10 +158,17 @@ __global__ void NMS_THRESHOLD(uint8_t *IN, /*uint8_t *XSOBEL, uint8_t *YSOBEL,*/
             
             if 
             (
-                
-                ((dir < 0.3927) && (MAG >= EE && MAG >= WW)) || 
-                ((dir > 0.3927) && (dir < 1.1781) && ( (MAG >= NW && MAG >= SE) || (MAG >= NE && MAG >= SW)))|| 
-                ((dir > 1.1781) && (MAG >= SS && MAG >= NN))
+                ///*horizontal*/((dir < 0.65753) && (MAG >= EE && MAG >= WW)) || 
+                ///*diagonal*/((dir > 0.65753) && (dir < 1.48550) && ( (MAG >= NW && MAG >= SE) || (MAG >= NE && MAG >= SW)))|| 
+                ///*vertical*/((dir > 1.48550) && (MAG >= SS && MAG >= NN))
+
+                 /*horizontal*/((dir < 0.4142135) && (MAG >= EE && MAG >= WW)) || 
+                 /*diagonal*/((dir > 0.4142135) && (dir < 2.4142135) && ( (MAG >= NW && MAG >= SE) || (MAG >= NE && MAG >= SW)))|| 
+                 /*vertical*/((dir > 2.4142135) && (MAG >= SS && MAG >= NN))
+
+                // /*horizontal*/((dir < 0.3927) && (MAG >= EE && MAG >= WW)) || 
+                // /*diagonal*/((dir > 0.3927) && (dir < 1.1781) && ( (MAG >= NW && MAG >= SE) || (MAG >= NE && MAG >= SW)))|| 
+                // /*vertical*/((dir > 1.1781) && (MAG >= SS && MAG >= NN))
             ){
                 //OUT_NMS[c] = MAG;
                 outputPixel = MAG;
@@ -276,7 +283,13 @@ __global__ void SOBEL(uint8_t *IN, /*uint8_t* XSOBEL, uint8_t* YSOBEL,*/ float* 
             //YSOBEL[(row_o * IMGwidth) + col_o] = (uint8_t)yACCUMt;
 
             //write direction results to global memory
-            DIR[(row_o * IMGwidth) + col_o] = atan2((double)xACCUMt,(double)yACCUMt);
+            //DIR[(row_o * IMGwidth) + col_o] = atan2((double)xACCUMt,(double)yACCUMt);
+            if (yACCUMt == 0){
+                DIR[(row_o * IMGwidth) + col_o] = 0.;
+            }
+            else
+                DIR[(row_o * IMGwidth) + col_o] = xACCUMt/yACCUMt;
+            
 
             prod = (xACCUMt*xACCUMt)+(yACCUMt*yACCUMt);
             sqrt_res = (uint32_t)(sqrt((double)prod));
