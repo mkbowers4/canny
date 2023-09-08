@@ -41,7 +41,8 @@ NOTES FOR CANNYCUDA (GPU)
 
     1) Follow installation guide for CUDA here:
         https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html
-
+        https://developer.nvidia.com/cuda-downloads
+    
     2) You will need libwb to build the project. Git clone from here:
         https://github.com/abduld/libwb.git
         git@github.com:abduld/libwb.git
